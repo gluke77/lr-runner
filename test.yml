@@ -1,0 +1,14 @@
+tests:
+  - name: sdn-test
+    procedure: load_runner.tests.iperf_pairs_zmq
+    args:
+      iperf_args: ['-t', '15']
+    tenants:
+      - name: demo
+        networks:
+          - name: sdn-net
+            servers:
+              - role: server
+                count: 1
+              - role: client
+                count: 1
