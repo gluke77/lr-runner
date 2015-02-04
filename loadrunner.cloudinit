@@ -1,0 +1,39 @@
+#!/bin/bash
+
+export LOAD_RUNNER_REPO=https://github.com/gluke77/load-runner.git
+export LOAD_RUNNER_BRANCH=master
+export LOAD_RUNNER_PATH=/opt/load-runner
+
+export CONTROLLER_IP=172.16.128.4
+#export OS_AUTH_URL='http://%s:5000/v2.0/' % CONTROLLER_IP
+#export OS_SERVICE_ENDPOINT='http://%s:35357/v2.0/' % CONTROLLER_IP
+#export OS_USERNAME='${OS_USERNAME}'
+#export OS_TENANT='${OS_TENANT}'
+export OS_TOKEN=084ce7959579475fbc8de035345ab276
+#export OS_PASSWORD='${OS_PASSWORD}'
+
+export MANAGEMENT_NETWORK_ID=039a81e2-8384-45ed-915c-8b17f19fea3e
+export MANAGEMENT_NAME=private
+export MANAGEMENT_CIDR=10.0.0.0/24
+export AGENT_FLAVOR_ID=2
+export AGENT_IMAGE_ID=84bb1403-d0d7-4ff4-92a5-00bce388439c
+
+echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+
+apt-get update
+apt-get install -y python-pip python-dev libxml2-dev libxslt1-dev gcc git 
+pip install netaddr python-keystoneclient python-neutronclient python-novaclient pyzmq
+
+git clone $LOAD_RUNNER_REPO $LOAD_RUNNER_PATH
+cd $LOAD_RUNNER_PATH
+git checkout $LOAD_RUNNER_BRANCH
+
+export TEST_FILE=$LOAD_RUNNER_PATH/load_runner/test.yml
+
+sed -i "s/OS_TENANT_NAME/${OS_TENANT_NAME}/g" $TEST_FILE
+sed -i "s/TEST_NAME/${TEST_NAME}/g" $TEST_FILE
+sed -i "s/TEST_NET_NAME/${TEST_NET_NAME}/g" $TEST_FILE
+
+cd $LOAD_RUNNER_PATH
+python setup.py install
+

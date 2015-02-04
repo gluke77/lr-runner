@@ -22,15 +22,11 @@ OS_AUTH_URL = env.get('OS_AUTH_URL',
                       'http://{}:5000/v2.0/'.format(CONTROLLER_IP))
 OS_REGION_NAME = env.get('OS_REGION', 'RegionOne')
 
-LOADRUNNER_IMAGE_NAME = 'load_runner.qcow2'
+LOADRUNNER_IMAGE_NAME = 'trusty-server-cloudimg-amd64-disk1.img'
 LOADRUNNER_USER = 'ubuntu'
+LOADRUNNER_CLOUDINIT = 'loadrunner.cloudinit'
 
 AGENT_IMAGE_NAME = 'centos-nettest.qcow2'
-
-SETTINGS_FILE_TEMPLATE = 'settings.py.template'
-SETTINGS_REMOTE_PATH = '/home/ubuntu/load_runner/load_runner/settings.py'
-TEST_FILE = 'test.yml'
-TEST_REMOTE_PATH = '/home/ubuntu/load_runner/load_runner/test.yml'
 
 MANAGEMENT_NET_NAME = env.get('MANAGEMENT_NET_NAME', 'private')
 MANAGEMENT_NET_CIDR = env.get('MANAGEMENT_NET_CIDR', '10.0.0.0/24')
@@ -61,10 +57,6 @@ def log_env():
         'LOADRUNNER_IMAGE_NAME',
         'AGENT_IMAGE_NAME',
         'LOADRUNNER_USER',
-        'SETTINGS_FILE_TEMPLATE',
-        'SETTINGS_REMOTE_PATH',
-        'TEST_FILE',
-        'TEST_REMOTE_PATH',
         'MANAGEMENT_NET_NAME',
         'MANAGEMENT_NET_CIDR',
         'MANAGEMENT_NET_ID'
@@ -199,10 +191,11 @@ def nova_boot(image, flavor, keypair, secgroup):
                  "keypair_id=%s, secgroup_id=%s", server_name,
                  flavor.id, image.id, keypair.id, secgroup.id)
     nova = get_nova_client()
-    server = nova.servers.create(
-        server_name, image, flavor,key_name=keypair.name,
-        security_groups=[secgroup.name]
-    )
+    with open(LOADRUNNER_CLOUDINIT, 'r') as f:
+        server = nova.servers.create(
+            server_name, image, flavor, key_name=keypair.name,
+            security_groups=[secgroup.name], userdata=f
+        )
     while server.status == 'BUILD':
         time.sleep(5)
         server = nova.servers.get(server.id)
@@ -348,40 +341,12 @@ if __name__ == '__main__':
 
     server_ip = get_ip(server, MANAGEMENT_NET_NAME)
 
-    settings_py = prepare_settings_file(agent_image.id, agent_flavor.id)
-
     ssh = get_ssh_client(server_ip, LOADRUNNER_USER, keypair)
     sftp = ssh.open_sftp()
-    logging.info("Copying local '%s' to remote '%s'", settings_py,
-                 SETTINGS_REMOTE_PATH)
-    sftp.put(settings_py, SETTINGS_REMOTE_PATH)
-    logging.info('Done')
-    logging.info("Copying local '%s' to remote '%s'", TEST_FILE,
-                 TEST_REMOTE_PATH)
-    sftp.put(TEST_FILE, TEST_REMOTE_PATH)
-    logging.info('Done')
-
-    logging.info('Setting up SDN tool in loadrunner VM')
-    stdin, stdout, stderr = ssh.exec_command(
-        'cd /home/ubuntu/load_runner && python setup.py install --user')
-
-    status = stdout.channel.recv_exit_status()
-
-    logging.info('Exit status %d', status)
-
-    fname = 'setup-stdout-{}.log'.format(UUID)
-    logging.info('Saving stdout to %s', fname)
-    with open(fname, 'w') as f:
-        f.write(stdout.read())
-
-    fname = 'setup-stderr-{}.log'.format(UUID)
-    logging.info('Saving stderr to %s', fname)
-    with open(fname, 'w') as f:
-        f.write(stderr.read())
 
     logging.info('Running test')
     stdin, stdout, stderr = ssh.exec_command(
-        'cd /home/ubuntu/load_runner/load_runner && python run.py -t sdn-test')
+        'cd /opt/load_runner/load_runner && python run.py -t sdn-test')
 
     status = stdout.channel.recv_exit_status()
 
@@ -402,7 +367,7 @@ if __name__ == '__main__':
 
     logging.info('Running test, pass #2')
     stdin, stdout, stderr = ssh.exec_command(
-        'cd /home/ubuntu/load_runner/load_runner && python run.py -t sdn-test')
+        'cd /opt/load_runner/load_runner && python run.py -t sdn-test')
 
     status = stdout.channel.recv_exit_status()
 
