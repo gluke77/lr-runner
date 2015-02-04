@@ -23,11 +23,9 @@ OS_AUTH_URL = env.get('OS_AUTH_URL',
 OS_REGION_NAME = env.get('OS_REGION', 'RegionOne')
 
 LOADRUNNER_IMAGE_NAME = 'load_runner.qcow2'
-LOADRUNNER_FLAVOR_ID = 3
+LOADRUNNER_USER = 'ubuntu'
 
 AGENT_IMAGE_NAME = 'centos-nettest.qcow2'
-AGENT_IMAGE_USER = 'ubuntu'
-AGENT_FLAVOR_ID = 2
 
 SETTINGS_FILE_TEMPLATE = 'settings.py.template'
 SETTINGS_REMOTE_PATH = '/home/ubuntu/load_runner/load_runner/settings.py'
@@ -61,10 +59,8 @@ def log_env():
         'OS_AUTH_URL',
         'OS_REGION_NAME',
         'LOADRUNNER_IMAGE_NAME',
-        'LOADRUNNER_FLAVOR_ID',
         'AGENT_IMAGE_NAME',
-        'AGENT_IMAGE_USER',
-        'AGENT_FLAVOR_ID',
+        'LOADRUNNER_USER',
         'SETTINGS_FILE_TEMPLATE',
         'SETTINGS_REMOTE_PATH',
         'TEST_FILE',
@@ -126,20 +122,7 @@ def get_glance_client():
     return __glance_client
 
 
-def glance_upload_image_from_url(imagename, url):
-    glance = get_glance_client()
-    imagename = imagename + '-' + UUID
-    logging.info("Uploading '%s' as image '%s'", url, imagename)
-    image = glance.images.create(
-        name=imagename,
-        disk_format='qcow2',
-        container_format='bare')
-    glance.images.update(image.id, copy_from=url)
-    logging.info('Uploaded, image_id=%s', image.id)
-    return image
-
-
-def glance_upload_image_from_file(imagename, filename):
+def glance_upload_image(imagename, filename):
     glance = get_glance_client()
     imagename = imagename + '-' + UUID
     logging.info("Uploading '%s' as image '%s'", filename, imagename)
@@ -155,7 +138,7 @@ def glance_upload_image_from_file(imagename, filename):
 
 def nova_keypair_add():
     keypair_name = 'sdn-key-' + UUID
-    logging.info("Adding keypair '%s' from file '%s'", keypair_name)
+    logging.info("Adding keypair '%s'", keypair_name)
     keypair = get_nova_client().keypairs.create(keypair_name)
     logging.info("Keypair added, id=%s", keypair.id)
     return keypair
@@ -194,20 +177,28 @@ def nova_create_secgroup():
     return secgroup
 
 
-def nova_get_flavor(id):
-    logging.info("Getting flavor, id=%s", id)
-    flavor = nova.flavors.get(id)
-    logging.info("Found flavor, name=%s", flavor.name)
+def nova_create_lr_flavor():
+    logging.info("Creating flavor for loadrunner")
+    flavor = get_nova_client().flavors.create(
+        'sdn-flavor-lr-' + UUID, 4096, 2, 20);
+    logging.info("Created flavor, name=%s", flavor.name)
     return flavor
 
 
-def nova_boot(image, keypair, secgroup):
-    flavor = nova_get_flavor(LOADRUNNER_FLAVOR_ID)
+def nova_create_agent_flavor():
+    logging.info("Creating flavor for agent")
+    flavor = get_nova_client().flavors.create(
+        'sdn-flavor-agent-' + UUID, 2048, 1, 20);
+    logging.info("Created flavor, name=%s", flavor.name)
+    return flavor
+
+
+def nova_boot(image, flavor, keypair, secgroup):
     server_name = 'loadrunner-' + UUID
     logging.info("Booting server '%s', flavor_id=%s, image_id=%s, "
                  "keypair_id=%s, secgroup_id=%s", server_name,
-                 LOADRUNNER_FLAVOR_ID, image.id, keypair.id,
-                 secgroup.id)
+                 flavor.id, image.id, keypair.id, secgroup.id)
+    nova = get_nova_client()
     server = nova.servers.create(
         server_name, image, flavor,key_name=keypair.name,
         security_groups=[secgroup.name]
@@ -225,12 +216,12 @@ def nova_boot(image, keypair, secgroup):
     return None
 
 
-def prepare_settings_file(agent_image_id):
+def prepare_settings_file(agent_image_id, agent_flavor_id):
     with open(SETTINGS_FILE_TEMPLATE) as f:
         text = f.read()
         text = text.replace('${CONTROLLER_IP}', CONTROLLER_IP)
         text = text.replace('${AGENT_IMAGE_ID}', agent_image_id)
-        text = text.replace('${AGENT_FLAVOR_ID}', str(AGENT_FLAVOR_ID))
+        text = text.replace('${AGENT_FLAVOR_ID}', agent_flavor_id)
         text = text.replace('${OS_USERNAME}', OS_USERNAME)
         text = text.replace('${OS_TENANT}', OS_TENANT_NAME)
         text = text.replace('${OS_TOKEN}', get_keystone_client().auth_token)
@@ -238,7 +229,7 @@ def prepare_settings_file(agent_image_id):
         text = text.replace('${MANAGEMENT_NET_ID}', MANAGEMENT_NET_ID)
         text = text.replace('${MANAGEMENT_NET_NAME}', MANAGEMENT_NET_NAME)
         text = text.replace('${MANAGEMENT_NET_CIDR}', MANAGEMENT_NET_CIDR)
-        newname = 'settings.py.' + uuid.uuid4().hex
+        newname = 'settings.py.' + UUID
         with open(newname, 'w') as wf:
             wf.write(text)
 
@@ -271,7 +262,25 @@ def get_ssh_client(host, user, keypair):
     return __ssh_client
 
 
+def get_floating_ip():
+    logging.info('Looking for available floating ip')
+    nova = get_nova_client()
+    floating_ips = nova.floating_ips.list()
+    for ip in floating_ips:
+        if not ip.instance_id and not ip.fixed_ip:
+            logging.info('Found %s', ip.ip)
+            return ip
+    logging.error('No floating IP available')
+    exit(-1)
+
+
 def get_ip(server, nw_name):
+    fip = get_floating_ip()
+    server.add_floating_ip(fip)
+    logging.info("Associated floating IP %s to server '%s'", fip.ip,
+                 server.id)
+    return fip.ip
+
     logging.info('Looking for network address')
     logging.info('Available networks %s', server.networks.keys())
     for network in server.networks[nw_name]:
@@ -321,26 +330,27 @@ if __name__ == '__main__':
     log_env()
     prepare_network()
 
-    lr_image = glance_upload_image_from_file('loadrunner',
-                                             LOADRUNNER_IMAGE_NAME)
-    agent_image = glance_upload_image_from_file('agent', AGENT_IMAGE_NAME)
-
-    nova = get_nova_client()
     keypair = nova_keypair_add()
-
     secgroup = nova_create_secgroup()
+
+    lr_flavor = nova_create_lr_flavor()
+    agent_flavor = nova_create_agent_flavor()
+
+    lr_image = glance_upload_image('loadrunner', LOADRUNNER_IMAGE_NAME)
+    agent_image = glance_upload_image('agent', AGENT_IMAGE_NAME)
 
     server = nova_boot(
         lr_image,
+        lr_flavor,
         keypair,
         secgroup
     )
 
     server_ip = get_ip(server, MANAGEMENT_NET_NAME)
 
-    settings_py = prepare_settings_file(agent_image.id)
+    settings_py = prepare_settings_file(agent_image.id, agent_flavor.id)
 
-    ssh = get_ssh_client(server_ip, AGENT_IMAGE_USER, keypair)
+    ssh = get_ssh_client(server_ip, LOADRUNNER_USER, keypair)
     sftp = ssh.open_sftp()
     logging.info("Copying local '%s' to remote '%s'", settings_py,
                  SETTINGS_REMOTE_PATH)
@@ -387,7 +397,7 @@ if __name__ == '__main__':
     with open(fname, 'w') as f:
         f.write(stderr.read())
 
-    logging.info('Waiting 60 seconds before the second pass')
+    logging.info('Waiting 300 seconds before the second pass')
     time.sleep(300)
 
     logging.info('Running test, pass #2')
@@ -407,4 +417,37 @@ if __name__ == '__main__':
     logging.info('Saving stderr to %s', fname)
     with open(fname, 'w') as f:
         f.write(stderr.read())
+
+    logging.info("Cleaning up")
+
+    logging.info("Deleting server %s, id=%s",
+                 server.name, server.id)
+    server.delete()
+
+    logging.info("Deleting agent image %s, id=%s",
+                 agent_image.name, agent_image.id)
+    get_glance_client().images.delete(agent_image.id)
+
+    logging.info("Deleting agent flavor %s, id=%s",
+                 agent_flavor.name, agent_flavor.id)
+    agent_flavor.delete()
+
+    logging.info("Deleting loadrunner image %s, id=%s",
+                 lr_image.name, lr_image.id)
+    get_glance_client().images.delete(lr_image.id)
+
+    logging.info("Deleting loadrunner flavor %s, id=%s",
+                 lr_flavor.name, lr_flavor.id)
+    lr_flavor.delete()
+
+    logging.info("Deleting keypair %s", keypair.id)
+    keypair.delete()
+
+    time.sleep(10) # wait while loadrunner server actually gets deleted
+
+    logging.info("Deleting security group %s, id=%s",
+                 secgroup.name, secgroup.id)
+    secgroup.delete()
+
+    logging.info("Done")
 
