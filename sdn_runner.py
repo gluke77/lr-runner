@@ -22,14 +22,14 @@ OS_AUTH_URL = env.get('OS_AUTH_URL',
                       'http://{}:5000/v2.0/'.format(CONTROLLER_IP))
 OS_REGION_NAME = env.get('OS_REGION', 'RegionOne')
 
-LOADRUNNER_IMAGE_NAME = 'load_runner.qcow2'
+LOADRUNNER_IMAGE_NAME = 'data/load_runner.qcow2'
 LOADRUNNER_USER = 'ubuntu'
 
-AGENT_IMAGE_NAME = 'centos-nettest.qcow2'
+AGENT_IMAGE_NAME = 'data/centos-nettest.qcow2'
 
-SETTINGS_FILE_TEMPLATE = 'settings.py.template'
+SETTINGS_FILE_TEMPLATE = 'data/settings.py.template'
 SETTINGS_REMOTE_PATH = '/home/ubuntu/load_runner/load_runner/settings.py'
-TEST_FILE = 'test.yml'
+TEST_FILE = 'data/test.yml'
 TEST_REMOTE_PATH = '/home/ubuntu/load_runner/load_runner/test.yml'
 
 MANAGEMENT_NET_NAME = env.get('MANAGEMENT_NET_NAME', 'private')
@@ -326,7 +326,7 @@ def prepare_network():
     logging.info('MANAGEMENT_NET_CIDR={}'.format(MANAGEMENT_NET_CIDR))
 
 
-if __name__ == '__main__':
+def run():
     log_env()
     prepare_network()
 
@@ -450,4 +450,8 @@ if __name__ == '__main__':
     secgroup.delete()
 
     logging.info("Done")
+
+
+if __name__ == '__main__':
+    run()
 
