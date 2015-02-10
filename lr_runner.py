@@ -137,7 +137,7 @@ def glance_upload_image(imagename, filename):
 
 
 def nova_keypair_add():
-    keypair_name = 'sdn-key-' + UUID
+    keypair_name = 'lr-key-' + UUID
     logging.info("Adding keypair '%s'", keypair_name)
     keypair = get_nova_client().keypairs.create(keypair_name)
     logging.info("Keypair added, id=%s", keypair.id)
@@ -146,7 +146,7 @@ def nova_keypair_add():
 
 def nova_create_secgroup():
     nova = get_nova_client()
-    secgroup_name = 'sdn-sg-' + UUID
+    secgroup_name = 'lr-sg-' + UUID
     secgroup = nova.security_groups.create(
         secgroup_name, '')
     logging.info("Creating security group '%s'", secgroup_name)
@@ -180,7 +180,7 @@ def nova_create_secgroup():
 def nova_create_lr_flavor():
     logging.info("Creating flavor for loadrunner")
     flavor = get_nova_client().flavors.create(
-        'sdn-flavor-lr-' + UUID, 4096, 2, 20);
+        'lr-flavor-lr-' + UUID, 4096, 2, 20);
     logging.info("Created flavor, name=%s", flavor.name)
     return flavor
 
@@ -188,7 +188,7 @@ def nova_create_lr_flavor():
 def nova_create_agent_flavor():
     logging.info("Creating flavor for agent")
     flavor = get_nova_client().flavors.create(
-        'sdn-flavor-agent-' + UUID, 2048, 1, 20);
+        'lr-flavor-agent-' + UUID, 2048, 1, 20);
     logging.info("Created flavor, name=%s", flavor.name)
     return flavor
 
@@ -381,7 +381,7 @@ def run():
 
     logging.info('Running test')
     stdin, stdout, stderr = ssh.exec_command(
-        'cd /home/ubuntu/load_runner/load_runner && python run.py -t sdn-test')
+        'cd /home/ubuntu/load_runner/load_runner && python run.py -t lr-test')
 
     status = stdout.channel.recv_exit_status()
 
@@ -402,7 +402,7 @@ def run():
 
     logging.info('Running test, pass #2')
     stdin, stdout, stderr = ssh.exec_command(
-        'cd /home/ubuntu/load_runner/load_runner && python run.py -t sdn-test')
+        'cd /home/ubuntu/load_runner/load_runner && python run.py -t lr-test')
 
     status = stdout.channel.recv_exit_status()
 
