@@ -1,12 +1,12 @@
 tests:
-  - name: sdn-test
+  - name: $TEST_NAME
     procedure: load_runner.tests.iperf_pairs_zmq
     args:
-      iperf_args: ['-t', '15']
+      iperf_args: $IPERF_ARGS
     tenants:
-      - name: demo
+      - name: $OS_TENANT_NAME
         networks:
-          - name: sdn-net
+          - name: $TEST_NET_NAME
             servers:
               - role: server
                 count: 1

@@ -3,6 +3,7 @@ from socket import error as socket_error
 import logging
 from os import environ as env
 import re
+import string
 import StringIO
 import time
 import uuid
@@ -21,15 +22,16 @@ OS_PASSWORD = env.get('OS_PASSWORD', 'pass')
 OS_AUTH_URL = env.get('OS_AUTH_URL',
                       'http://{}:5000/v2.0/'.format(CONTROLLER_IP))
 OS_REGION_NAME = env.get('OS_REGION', 'RegionOne')
+OS_TOKEN = None
 
 LOADRUNNER_IMAGE_NAME = 'data/load_runner.qcow2'
 LOADRUNNER_USER = 'ubuntu'
 
 AGENT_IMAGE_NAME = 'data/centos-nettest.qcow2'
 
-SETTINGS_FILE_TEMPLATE = 'data/settings.py.template'
+SETTINGS_TEMPLATE = 'data/settings.py.template'
 SETTINGS_REMOTE_PATH = '/home/ubuntu/load_runner/load_runner/settings.py'
-TEST_FILE = 'data/test.yml'
+TEST_TEMPLATE = 'data/test.yml.template'
 TEST_REMOTE_PATH = '/home/ubuntu/load_runner/load_runner/test.yml'
 
 MANAGEMENT_NET_NAME = env.get('MANAGEMENT_NET_NAME', 'private')
@@ -38,6 +40,12 @@ MANAGEMENT_NET_ID = env.get('MANAGEMENT_NET_ID')
 
 UBUNTU_IMAGE_URL = 'http://cloud-images.ubuntu.com/trusty/current/trusty-server-cloudimg-amd64-disk1.img'
 
+AGENT_IMAGE_ID = None
+AGENT_FLAVOR_ID = None
+
+TEST_NAME = env.get('TEST_NAME', 'lr-test')
+TEST_NET_NAME = env.get('TEST_NET_NAME', 'lr-test-net')
+IPERF_ARGS = env.get('IPERF_ARGS', "['-t', '15']")
 
 __keystone_client = None
 __nova_client = None
@@ -51,25 +59,8 @@ UUID=uuid.uuid4().hex
 
 
 def log_env():
-    for var in [
-        'CONTROLLER_IP',
-        'OS_TENANT_NAME',
-        'OS_USERNAME',
-        'OS_PASSWORD',
-        'OS_AUTH_URL',
-        'OS_REGION_NAME',
-        'LOADRUNNER_IMAGE_NAME',
-        'AGENT_IMAGE_NAME',
-        'LOADRUNNER_USER',
-        'SETTINGS_FILE_TEMPLATE',
-        'SETTINGS_REMOTE_PATH',
-        'TEST_FILE',
-        'TEST_REMOTE_PATH',
-        'MANAGEMENT_NET_NAME',
-        'MANAGEMENT_NET_CIDR',
-        'MANAGEMENT_NET_ID'
-    ]:
-        logging.info('%s=%s', var, eval(var))
+    for k, v in globals().iteritems():
+        logging.info('%s=%s', k, v)
 
 
 def get_keystone_client():
@@ -216,22 +207,13 @@ def nova_boot(image, flavor, keypair, secgroup):
     return None
 
 
-def prepare_settings_file(agent_image_id, agent_flavor_id):
-    with open(SETTINGS_FILE_TEMPLATE) as f:
-        text = f.read()
-        text = text.replace('${CONTROLLER_IP}', CONTROLLER_IP)
-        text = text.replace('${AGENT_IMAGE_ID}', agent_image_id)
-        text = text.replace('${AGENT_FLAVOR_ID}', agent_flavor_id)
-        text = text.replace('${OS_USERNAME}', OS_USERNAME)
-        text = text.replace('${OS_TENANT}', OS_TENANT_NAME)
-        text = text.replace('${OS_TOKEN}', get_keystone_client().auth_token)
-        text = text.replace('${OS_PASSWORD}', OS_PASSWORD)
-        text = text.replace('${MANAGEMENT_NET_ID}', MANAGEMENT_NET_ID)
-        text = text.replace('${MANAGEMENT_NET_NAME}', MANAGEMENT_NET_NAME)
-        text = text.replace('${MANAGEMENT_NET_CIDR}', MANAGEMENT_NET_CIDR)
-        newname = 'settings.py.' + UUID
-        with open(newname, 'w') as wf:
-            wf.write(text)
+def prepare_file(template_name, file_name):
+    with open(template_name) as t:
+        templ = string.Template(t.read())
+        text = templ.substitute(globals())
+        newname = file_name + UUID
+        with open(newname, 'w') as f:
+            f.write(text)
 
     logging.info('Prepared %s', newname)
     return newname
@@ -335,9 +317,13 @@ def run():
 
     lr_flavor = nova_create_lr_flavor()
     agent_flavor = nova_create_agent_flavor()
+    global AGENT_FLAVOR_ID
+    AGENT_FLAVOR_ID = agent_flavor.id
 
     lr_image = glance_upload_image('loadrunner', LOADRUNNER_IMAGE_NAME)
     agent_image = glance_upload_image('agent', AGENT_IMAGE_NAME)
+    global AGENT_IMAGE_ID
+    AGENT_IMAGE_ID = agent_image.id
 
     server = nova_boot(
         lr_image,
@@ -348,7 +334,11 @@ def run():
 
     server_ip = get_ip(server, MANAGEMENT_NET_NAME)
 
-    settings_py = prepare_settings_file(agent_image.id, agent_flavor.id)
+    global OS_TOKEN
+    OS_TOKEN = get_keystone_client().auth_token
+
+    settings_py = prepare_file(SETTINGS_TEMPLATE, 'settings.py.')
+    test_yml = prepare_file(TEST_TEMPLATE, 'test.yml.')
 
     ssh = get_ssh_client(server_ip, LOADRUNNER_USER, keypair)
     sftp = ssh.open_sftp()
@@ -356,9 +346,9 @@ def run():
                  SETTINGS_REMOTE_PATH)
     sftp.put(settings_py, SETTINGS_REMOTE_PATH)
     logging.info('Done')
-    logging.info("Copying local '%s' to remote '%s'", TEST_FILE,
+    logging.info("Copying local '%s' to remote '%s'", test_yml,
                  TEST_REMOTE_PATH)
-    sftp.put(TEST_FILE, TEST_REMOTE_PATH)
+    sftp.put(test_yml, TEST_REMOTE_PATH)
     logging.info('Done')
 
     logging.info('Setting up SDN tool in loadrunner VM')
@@ -381,7 +371,8 @@ def run():
 
     logging.info('Running test')
     stdin, stdout, stderr = ssh.exec_command(
-        'cd /home/ubuntu/load_runner/load_runner && python run.py -t lr-test')
+        'cd /home/ubuntu/load_runner/load_runner && python run.py -t'
+        '{}'.format(TEST_NAME))
 
     status = stdout.channel.recv_exit_status()
 
@@ -402,7 +393,8 @@ def run():
 
     logging.info('Running test, pass #2')
     stdin, stdout, stderr = ssh.exec_command(
-        'cd /home/ubuntu/load_runner/load_runner && python run.py -t lr-test')
+        'cd /home/ubuntu/load_runner/load_runner && python run.py ',
+        '{}'.format(TEST_NAME))
 
     status = stdout.channel.recv_exit_status()
 
